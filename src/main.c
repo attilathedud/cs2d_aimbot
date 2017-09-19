@@ -1,5 +1,5 @@
 /*!
-*   An osx 10.11+ aimbot for cs2d. Only works on bots, but can easily be modified to work online by 
+*   An osx 10.11+ aimbot for cs2d 1.0.0.3. Only works on bots, but can easily be modified to work online by 
 *   changing the tpl_get_bot signature to call tpl_get_player.
 *
 *   Compiles as a dynamic library and needs to be injected into CS2D using an injector. Tested with the
@@ -43,6 +43,27 @@
 #include <math.h>
 #include <mach/mach.h>
 
+#define RADIANS_TO_DEGREES(X) (X * 180.0 / M_PI)        // Helper function to convert radians to degrees
+#define EUCLID_DIST(X,Y) sqrt( ( X * X ) + ( Y * Y ) )
+
+#define MAX_PLAYERS 32                                  // Max entities in a game
+
+#define CLIENT_BASE_POINTER 0x3136e0                    // Client base pointer address
+#define INVALID_BOT 0x3B6FE0                            // Address returned by tpl_get_bot on invalid index
+#define CLIENT_GET_ROTATION 0x00105c31                  // Function that applies rotation to our player
+
+/*!
+*   cs2d's player structure.
+*/
+typedef struct player {
+    unsigned char unknown[ 0x144 ];
+    float x;
+    float y;
+    float rotation;
+    unsigned char unknown2[ 0x14 ];
+    int health;
+} player_t;
+
 /*!
 *   A helper function to call cs2d's internal _tpl_get_bot function located at (0x309168). It takes
 *   an index between 2 - 32 and returns the base of the bot's struct in eax.
@@ -79,30 +100,24 @@ void hook()
     float closest_player_distance = -1.0;
     float closest_angle = 0.0;
 
-    // Get our player's x and y
-    long *client_struct = (long*)(0x3136e0);
-    long player_struct = *client_struct;
+    // Set our player struct to the correct address. The base client structure is at 0x3136e0,
+    // with dword ptr [0x3136e0] pointing to our player struct.
+    player_t *cur_player = (player_t*)(*(long*)CLIENT_BASE_POINTER);
 
-    float *player_x = (float*)(player_struct+0x144);
-    float *player_y = (float*)(player_struct+0x148);
-
-    for( int i = 2; i < 32; i++ )
+    for( int i = 2; i < MAX_PLAYERS; i++ )
     {
-        long bot_base_address = tpl_get_bot( i );
+        player_t *cur_bot = (player_t*)tpl_get_bot( i );
     
-        if( bot_base_address == 0x3B6FE0 )
+        if( (long)cur_bot == INVALID_BOT || cur_bot->health <= 0 )
         {
             continue;
         }
-
-        float *dx = (float*)(bot_base_address+0x144);
-        float *dy = (float*)(bot_base_address+0x148);
     
-        float abs_x = *dx - *player_x;
-        float abs_y = *dy - *player_y;
+        float abs_x = cur_bot->x - cur_player->x;
+        float abs_y = cur_bot->y - cur_player->y;
     
         float angle = atanf( abs_y / abs_x );
-        angle = (angle * 180.0 / M_PI) + 90;
+        angle = RADIANS_TO_DEGREES(angle) + 90;
     
         if( abs_x < 0 ) 
         {
@@ -110,7 +125,7 @@ void hook()
         }
 
         // Calculate the distance between us and the bot
-        float cur_closest_distance = sqrt( ( abs_x * abs_x ) + ( abs_y * abs_y ) );
+        float cur_closest_distance = EUCLID_DIST( abs_x, abs_y );
         if( closest_player_distance == -1 || closest_player_distance > cur_closest_distance ) 
         {
             closest_player_distance = cur_closest_distance;
@@ -118,8 +133,7 @@ void hook()
         }
     }
 
-    float *mouse_angle = (float*)(player_struct+0x14c);
-    *mouse_angle = closest_angle;
+    cur_player->rotation = closest_angle;
 
     // Restore the registers and stack state
     __asm__( "popal" );
@@ -129,9 +143,12 @@ void hook()
 // redirects it to our hook function.
 void __attribute__ ((constructor)) install()
 {
-    unsigned int *patch_address = (unsigned int*)0x00105c32;
+    unsigned int *patch_address = (unsigned int*)(CLIENT_GET_ROTATION + 1);
 
-    vm_protect( mach_task_self(), (unsigned int)patch_address, 5, 0, VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_READ );
+    // Unprotect the code section so we can write to it
+    vm_protect( mach_task_self(), (unsigned int)patch_address, 4, 0, VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_READ );
 
-    *(patch_address) = (unsigned int)(&hook - 5) - (unsigned int)0x00105c31;
+    // gcc places the address of hook after push ebp; mov ebp, esp, so to offset for this we subtract 5
+    // from its address
+    *patch_address = (unsigned int)(&hook - 5) - (unsigned int)CLIENT_GET_ROTATION;
 }
