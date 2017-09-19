@@ -44,7 +44,7 @@
 #include <mach/mach.h>
 
 #define RADIANS_TO_DEGREES(X) (X * 180.0 / M_PI)        // Helper function to convert radians to degrees
-#define EUCLID_DIST(X,Y) sqrt( ( X * X ) + ( Y * Y ) )
+#define EUCLID_DIST(X,Y) sqrt( ( X * X ) + ( Y * Y ) )  // Helper function to calculate Euclidean distance
 
 #define MAX_PLAYERS 32                                  // Max entities in a game
 
